@@ -1,6 +1,6 @@
 # ===================================================================
-# Tibia World RPG Client - Extended DLL
-# Copyright (C) 2020-2026 Nottinghster (github.com/rodrigopaixaorj)
+# Tibia 860 - Extended Client DLL
+# Copyright (C) 2026 Nottinghster (github.com/rodrigopaixaorj)
 # ===================================================================
 
 cmake_minimum_required(VERSION 3.15)

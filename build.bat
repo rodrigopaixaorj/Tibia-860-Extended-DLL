@@ -2,8 +2,8 @@
 setlocal enabledelayedexpansion
 
 :: ===================================================================
-:: Tibia World RPG Client - Extended DLL Build Script
-:: Copyright (C) 2020-2026 Nottinghster (github.com/rodrigopaixaorj)
+:: Tibia 860 - Extended Client DLL Build Script
+:: Copyright (C) 2026 Nottinghster (github.com/rodrigopaixaorj)
 :: ===================================================================
 
 echo ===================================================================

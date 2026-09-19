@@ -1,6 +1,6 @@
 ; ===================================================================
-; Tibia World RPG Client - Extended DLL Export Definitions
-; Copyright (C) 2020-2026 Nottinghster (github.com/rodrigopaixaorj)
+; Tibia 860 - Extended Client DLL Export Definitions
+; Copyright (C) 2026 Nottinghster (github.com/rodrigopaixaorj)
 ; ===================================================================
 
 LIBRARY ddraw.dll
