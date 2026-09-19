@@ -176,13 +176,13 @@ static DWORD HPBarRenderHandle() {
     return (DWORD)&g_newRenderer;
 }
 
-// Standard OpenTibia RSA Public Key (1024-bit)
+// Standard OpenTibia RSA Public Key (1024-bit, 309 decimal digits)
 static const char g_openTibiaRSAKey[] =
-    "1091201329673994292788609605089955415282375929027929290382885787"
-    "8584533835932840908816697375827592878812892590351731203044105555"
-    "5106373059410154950149632459400278786856426436669218021685472810"
-    "6616118537087815205705633368305019752110325981061502496144570150"
-    "284288240361060689914090400755288849721";
+    "1091201329673994292788609605089955415282375029027981291234687579"
+    "3726629149257644633073969600111060390723088861007265581882535850"
+    "3429057592827629436413108566029093628212635953836686562675849720"
+    "6207862794310902180176810615217550567108238764764442605581471797"
+    "07119674283982419152118103759076030616683978566631413";
 
 static void SafeInit() {
     LoadConfig("config.ini");
@@ -196,7 +196,22 @@ static void SafeInit() {
     VirtualProtect((LPVOID)(g_clientBaseAddr + 0x1000), 0x238000, PAGE_EXECUTE_READWRITE, &dwOldProtect);
 
     // RSA Key Patch (allows connection to OpenTibia servers)
-    HookMemory(g_clientBaseAddr + 0x1B8980, g_openTibiaRSAKey, sizeof(g_openTibiaRSAKey) - 1);
+    const char* rsaToInject = g_config.customRSAKey.empty() ? g_openTibiaRSAKey : g_config.customRSAKey.c_str();
+    size_t rsaLen = strlen(rsaToInject);
+    if (rsaLen <= 309) {
+        HookMemory(g_clientBaseAddr + 0x1B8980, rsaToInject, rsaLen + 1);
+    }
+
+    // Auto Login Server Redirection (if configured in config.ini)
+    if (!g_config.serverIP.empty() && g_config.serverIP.length() < 20) {
+        for (int i = 0; i < 10; ++i) {
+            uint32_t hostAddr = g_clientBaseAddr + 0x1B88B4 + (i * 20);
+            HookMemory(hostAddr, g_config.serverIP.c_str(), g_config.serverIP.length() + 1);
+
+            uint32_t portAddr = g_clientBaseAddr + 0x1B8864 + (i * 8);
+            OverWriteWord(portAddr, g_config.serverPort);
+        }
+    }
 
     // Tibia 8.60 Function and Data Addresses
     g_clientPointerTransPixels = g_clientBaseAddr + 0x24A9A8;

@@ -17,6 +17,12 @@ static bool ReadIniBool(const char* section, const char* key, bool defaultValue,
     return (val != 0);
 }
 
+static std::string ReadIniString(const char* section, const char* key, const std::string& defaultValue, const char* filename) {
+    char buffer[512];
+    DWORD len = GetPrivateProfileStringA(section, key, defaultValue.c_str(), buffer, sizeof(buffer), filename);
+    return std::string(buffer, len);
+}
+
 void LoadConfig(const std::string& filename) {
     char fullPath[MAX_PATH];
     GetCurrentDirectoryA(MAX_PATH, fullPath);
@@ -36,4 +42,9 @@ void LoadConfig(const std::string& filename) {
     g_config.extendedMagicEffects = ReadIniBool("Limits", "ExtendedMagicEffects", true, fullPath);
     g_config.extendedPlayerStats  = ReadIniBool("Limits", "ExtendedPlayerStats", true, fullPath);
     g_config.extendedPlayerSkills = ReadIniBool("Limits", "ExtendedPlayerSkills", true, fullPath);
+
+    g_config.serverIP      = ReadIniString("Network", "ServerIP", "", fullPath);
+    g_config.serverPort    = static_cast<uint16_t>(GetPrivateProfileIntA("Network", "ServerPort", 7171, fullPath));
+    g_config.customRSAKey  = ReadIniString("Network", "CustomRSAKey", "", fullPath);
 }
+

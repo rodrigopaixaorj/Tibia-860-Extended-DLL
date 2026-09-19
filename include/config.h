@@ -24,6 +24,11 @@ struct DLLConfig {
     bool extendedMagicEffects = true;
     bool extendedPlayerStats = true;
     bool extendedPlayerSkills = true;
+
+    // Network & Server
+    std::string serverIP = "";
+    uint16_t serverPort = 7171;
+    std::string customRSAKey = "";
 };
 
 extern DLLConfig g_config;
