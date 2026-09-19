@@ -43,31 +43,31 @@ The original Tibia 8.60 client was released in 2010. While still the most popula
 
 ## Key Features
 
-### 🎨 Graphics & Rendering Engine
+### Graphics & Rendering Engine
 - **Full 32-bit ARGB Alpha Transparency**: Intercepts texture rendering in both **OpenGL** and **DirectX 9** pipelines, replacing binary magenta transparency with full 8-bit alpha channel blending (`GL_SRC_ALPHA`, `GL_ONE_MINUS_SRC_ALPHA`).
 - **Extended Sprites (> 65,535)**: Re-engineers sprite indexing from `uint16_t` to `uint32_t`, raising the sprite ceiling to over 4 billion sprites.
 - **In-Memory RAM Sprite Cache**: Caches `Tibia.spr` (up to 250 MB) into RAM to eliminate disk I/O bottlenecks and stutter during fast movement and dense map rendering.
 - **DirectDraw 7 Upgrade**: Automatically updates legacy DirectDraw calls to DirectDraw 7 for smooth composition on modern desktop window managers.
 
-### ⚙️ Engine Limits Unlocked
+### Engine Limits Unlocked
 - **Extended Player Stats**: Extends player health and mana display from `uint16_t` (max 65,535) to full `int32_t` (over 2 billion).
 - **Extended Magic Effects**: Expands effect IDs from `uint8_t` (max 255) to `uint16_t` (max 65,535).
 - **Extended Skills**: Increases skill levels from `uint8_t` (max 255) to `uint16_t`.
 - **OpenTibia RSA Key Injection**: Replaces CipSoft's default 1024-bit RSA public key with the standard OpenTibia key, allowing connection to custom servers out-of-the-box.
 
-### 📦 Seamless Modern `.dat` Reader
+### Seamless Modern `.dat` Reader
 - **Integrated Modern `.dat` Parser**: Completely supersedes the client's internal `.dat` loader.
 - **Backwards & Forwards Compatible**: Automatically detects signature flags and version layouts (standard 8.60 or modern 10.x/12.x formats with signature `0x4A10`).
 - **Extended Attributes Support**: Parses ground speed, text lengths, light color/intensity, displacement (`dispX`/`dispY`), elevation, minimap colors, lens help, Market Data (attr 33), and modern flags.
 - **Frame Groups & Animation Sequences**: Supports complex animation definitions and directional creature frame groups.
 
-### 🖥️ UI & Quality of Life
+### UI & Quality of Life
 - **On-Screen Player Mana Bar**: Renders a dedicated mana bar directly underneath the player's health bar on the game screen.
 - **HUD Percentage Overlays**: Displays numerical percentages (`%d%%`) on the player health and mana status indicators.
 - **Mount System Support**: Automatically handles mount layers and applies character elevation offset (`+3px` vertical axis) when riding.
 - **In-Game Market System Framework**: Native binary hooks and message parser for item trading interfaces.
 
-### ⏱️ Performance & OS Compatibility
+### Performance & OS Compatibility
 - **High-Resolution QPC Timer**: Replaces low-precision `timeGetTime` (which runs at ~15.6ms on Windows 10/11) with Windows `QueryPerformanceCounter` hardware timers. Completely cures frame drops, micro-stutters, and input lag.
 
 ---
