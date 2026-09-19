@@ -1,0 +1,16 @@
+; ===================================================================
+; Tibia World RPG Client - Extended DLL Export Definitions
+; Copyright (C) 2020-2026 Nottinghster (github.com/rodrigopaixaorj)
+; ===================================================================
+
+LIBRARY ddraw.dll
+EXPORTS
+    DirectDrawCreate = FakeDirectDrawCreate @1
+    DirectDrawCreateClipper = FakeDirectDrawCreateClipper @2
+    DirectDrawCreateEx = FakeDirectDrawCreateEx @3
+    DirectDrawEnumerateA = FakeDirectDrawEnumerateA @4
+    DirectDrawEnumerateExA = FakeDirectDrawEnumerateExA @5
+    DirectDrawEnumerateExW = FakeDirectDrawEnumerateExW @6
+    DirectDrawEnumerateW = FakeDirectDrawEnumerateW @7
+    DllCanUnloadNow = FakeDllCanUnloadNow PRIVATE
+    DllGetClassObject = FakeDllGetClassObject PRIVATE
