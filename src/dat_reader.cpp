@@ -335,6 +335,34 @@ bool LoadDatFileCustom(const char* datPath) {
                     }
                 }
 
+                if (category == DAT_THING_MISSILE && px == 3 && py == 3 && isModernDat) {
+                    // Modern DAT files (0x4A10 / 10.x+) store 3x3 missile direction patterns
+                    // inverted relative to 8.60 native renderer:
+                    // 8.60_sprite(x, y) = modern_sprite(2 - x, 2 - y)
+                    uint32_t singleDirSprites = (uint32_t)w * h * layers;
+                    uint32_t* remappedSprites = (uint32_t*)client_malloc(totalSprites * sizeof(uint32_t));
+                    if (remappedSprites) {
+                        for (uint32_t a = 0; a < anim; ++a) {
+                            for (uint32_t z = 0; z < pz; ++z) {
+                                for (uint32_t y = 0; y < 3; ++y) {
+                                    for (uint32_t x = 0; x < 3; ++x) {
+                                        uint32_t srcIndex = ((a * pz + z) * 3 + y) * 3 + x;
+                                        uint32_t dstX = 2 - x;
+                                        uint32_t dstY = 2 - y;
+                                        uint32_t dstIndex = ((a * pz + z) * 3 + dstY) * 3 + dstX;
+
+                                        memcpy(remappedSprites + (dstIndex * singleDirSprites),
+                                               sprites + (srcIndex * singleDirSprites),
+                                               singleDirSprites * sizeof(uint32_t));
+                                    }
+                                }
+                            }
+                        }
+                        client_free(sprites);
+                        sprites = remappedSprites;
+                    }
+                }
+
                 thing->width = w;
                 thing->height = h;
                 thing->exactSize = realSize;

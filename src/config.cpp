@@ -37,11 +37,15 @@ void LoadConfig(const std::string& filename) {
     g_config.drawManaBar         = ReadIniBool("Features", "DrawManaBar", true, fullPath);
     g_config.enableMounts        = ReadIniBool("Features", "EnableMounts", true, fullPath);
     g_config.enableMarket        = ReadIniBool("Features", "EnableMarket", true, fullPath);
+    g_config.showAttackAnimations = ReadIniBool("Features", "ShowAttackAnimations", true, fullPath);
     g_config.extendedOpcode      = ReadIniBool("Features", "ExtendedOpcode", true, fullPath);
 
     g_config.extendedMagicEffects = ReadIniBool("Limits", "ExtendedMagicEffects", true, fullPath);
     g_config.extendedPlayerStats  = ReadIniBool("Limits", "ExtendedPlayerStats", true, fullPath);
     g_config.extendedPlayerSkills = ReadIniBool("Limits", "ExtendedPlayerSkills", true, fullPath);
+
+    g_config.effectSpeedMs = GetPrivateProfileIntA("Tuning", "EffectSpeedMs", 75, fullPath);
+    if (g_config.effectSpeedMs <= 0) g_config.effectSpeedMs = 75;
 
     g_config.serverIP      = ReadIniString("Network", "ServerIP", "", fullPath);
     g_config.serverPort    = static_cast<uint16_t>(GetPrivateProfileIntA("Network", "ServerPort", 7171, fullPath));

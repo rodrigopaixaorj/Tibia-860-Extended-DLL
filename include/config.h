@@ -20,10 +20,14 @@ struct DLLConfig {
     bool drawManaBar = true;
     bool enableMounts = true;
     bool enableMarket = true;
+    bool showAttackAnimations = true;
     bool extendedOpcode = true;
     bool extendedMagicEffects = true;
     bool extendedPlayerStats = true;
     bool extendedPlayerSkills = true;
+
+    // Animation & Movement Tuning
+    int effectSpeedMs = 75;
 
     // Network & Server
     std::string serverIP = "";

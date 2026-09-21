@@ -19,6 +19,8 @@
 #include "market_window.h"
 #include "timer.h"
 #include "dat_reader.h"
+#include <mmsystem.h>
+#pragma comment(lib, "winmm.lib")
 
 uint32_t g_clientBaseAddr = 0;
 uint32_t g_clientVersion = 0;
@@ -206,6 +208,270 @@ static DWORD HPBarRenderHandle() {
     return (DWORD)&g_newRenderer;
 }
 
+static inline bool IsAttackAnimation(int type) {
+    // Magic Effect IDs used by modern OpenTibia servers for weapon attack slashes & hits:
+    // 304: Sword, 305: Axe, 306: Club, 307: Special Weapon, 309: Fist
+    return (type == 304 || type == 305 || type == 306 || type == 307 || type == 309);
+}
+
+static int g_attackAnimPx = 2;
+static int g_attackAnimPy = 2;
+
+typedef int(__cdecl* t_GetMagicEffectSprite)(int type, int w, int h, int layer, int px, int py, int pz, int anim);
+
+static int __cdecl Hooked_GetMagicEffectSprite(int type, int w, int h, int layer, int px, int py, int pz, int anim) {
+    if (IsAttackAnimation(type)) {
+        if (!g_config.showAttackAnimations) {
+            return 0; // Don't draw weapon attack animation if disabled in config.ini
+        }
+        // Apply directional patterns (px, py) for 3x3 weapon swing effects
+        px = g_attackAnimPx;
+        py = g_attackAnimPy;
+    }
+    t_GetMagicEffectSprite origFunc = (t_GetMagicEffectSprite)(g_clientBaseAddr + 0x105540);
+    return origFunc(type, w, h, layer, px, py, pz, anim);
+}
+
+static void __cdecl Hooked_AddMagicEffect(int posX, int posY, int posZ, int type) {
+    if (IsAttackAnimation(type)) {
+        if (!g_config.showAttackAnimations) {
+            return; // Skip adding attack effect when disabled
+        }
+
+        // Calculate attack direction from player to target position
+        int playerX = *(int*)(g_clientBaseAddr + 0x23FE6C);
+        int playerY = *(int*)(g_clientBaseAddr + 0x23FE68);
+        int dx = posX - playerX;
+        int dy = posY - playerY;
+
+        if (dx > 0 && dy == 0)      { g_attackAnimPx = 3; g_attackAnimPy = 2; } // East
+        else if (dx < 0 && dy == 0) { g_attackAnimPx = 1; g_attackAnimPy = 2; } // West
+        else if (dx == 0 && dy > 0) { g_attackAnimPx = 2; g_attackAnimPy = 3; } // South
+        else if (dx == 0 && dy < 0) { g_attackAnimPx = 2; g_attackAnimPy = 1; } // North
+        else if (dx > 0 && dy > 0)  { g_attackAnimPx = 3; g_attackAnimPy = 3; } // SouthEast
+        else if (dx > 0 && dy < 0)  { g_attackAnimPx = 3; g_attackAnimPy = 1; } // NorthEast
+        else if (dx < 0 && dy > 0)  { g_attackAnimPx = 1; g_attackAnimPy = 3; } // SouthWest
+        else if (dx < 0 && dy < 0)  { g_attackAnimPx = 1; g_attackAnimPy = 1; } // NorthWest
+        else {
+            // On same tile: use player facing direction
+            uint32_t playerDir = *(uint32_t*)(g_clientBaseAddr + 0x23FE20);
+            switch (playerDir) {
+                case 0: g_attackAnimPx = 2; g_attackAnimPy = 1; break; // North
+                case 1: g_attackAnimPx = 3; g_attackAnimPy = 2; break; // East
+                case 2: g_attackAnimPx = 2; g_attackAnimPy = 3; break; // South
+                case 3: g_attackAnimPx = 1; g_attackAnimPy = 2; break; // West
+                default: g_attackAnimPx = 2; g_attackAnimPy = 2; break;
+            }
+        }
+    }
+
+    typedef void(__cdecl* t_AddMagicEffect)(int, int, int, int);
+    ((t_AddMagicEffect)(g_clientBaseAddr + 0xE52C0))(posX, posY, posZ, type);
+}
+
+// Real-Time Magic Effects Animation Timing (Matches TFC frame timing at ~75ms/frame)
+static DWORD g_effectStartTime[200] = { 0 };
+static int g_effectLastType[200] = { 0 };
+
+static int __cdecl Hooked_GetMagicEffectFrame(int effectIndex) {
+    if (effectIndex < 0 || effectIndex >= 200) {
+        return 1;
+    }
+
+    uint8_t* slot = (uint8_t*)(g_clientBaseAddr + 0x24F610 + (effectIndex * 0x60));
+    int state = *(int*)(slot + 0x00);
+    if (state != 1) { // Not an active magic effect
+        g_effectStartTime[effectIndex] = 0;
+        return 1;
+    }
+
+    int effectType = *(int*)(slot + 0x04);
+    DWORD now = timeGetTime();
+    if (g_effectStartTime[effectIndex] == 0 || g_effectLastType[effectIndex] != effectType) {
+        g_effectStartTime[effectIndex] = now;
+        g_effectLastType[effectIndex] = effectType;
+    }
+
+    typedef int(__cdecl* t_GetEffectAnimCount)(int);
+    int animCount = ((t_GetEffectAnimCount)(g_clientBaseAddr + 0x105390))(effectType);
+    if (animCount <= 1) {
+        return 1;
+    }
+
+    int frameDuration = g_config.effectSpeedMs > 0 ? g_config.effectSpeedMs : 75;
+    DWORD elapsed = now - g_effectStartTime[effectIndex];
+    int frame = (int)(elapsed / frameDuration) + 1; // 1-indexed
+
+    if (frame > animCount) {
+        typedef void(__cdecl* t_DestroyEffect)(int);
+        ((t_DestroyEffect)(g_clientBaseAddr + 0xE5DB0))(effectIndex);
+        g_effectStartTime[effectIndex] = 0;
+        return animCount;
+    }
+
+    *(int*)(slot + 0x08) = frame;
+    return frame;
+}
+
+static void __cdecl Hooked_UpdateEffects() {
+    DWORD now = timeGetTime();
+    int frameDuration = g_config.effectSpeedMs > 0 ? g_config.effectSpeedMs : 75;
+    typedef int(__cdecl* t_GetEffectAnimCount)(int);
+    typedef void(__cdecl* t_DestroyEffect)(int);
+    t_GetEffectAnimCount getAnimCount = (t_GetEffectAnimCount)(g_clientBaseAddr + 0x105390);
+    t_DestroyEffect destroyEffect = (t_DestroyEffect)(g_clientBaseAddr + 0xE5DB0);
+
+    for (int i = 0; i < 200; ++i) {
+        uint8_t* slot = (uint8_t*)(g_clientBaseAddr + 0x24F610 + (i * 0x60));
+        int state = *(int*)(slot + 0x00);
+        if (state == 1) { // Magic Effect
+            int effectType = *(int*)(slot + 0x04);
+            if (g_effectStartTime[i] == 0 || g_effectLastType[i] != effectType) {
+                g_effectStartTime[i] = now;
+                g_effectLastType[i] = effectType;
+            }
+            int animCount = getAnimCount(effectType);
+            if (animCount > 1) {
+                DWORD elapsed = now - g_effectStartTime[i];
+                int frame = (int)(elapsed / frameDuration) + 1;
+                if (frame > animCount) {
+                    destroyEffect(i);
+                    g_effectStartTime[i] = 0;
+                } else {
+                    *(int*)(slot + 0x08) = frame;
+                }
+            }
+        } else if (state == 2) {
+            // Distance Shoot / Projectile update
+            int count = *(int*)(slot + 0x1C);
+            count++;
+            *(int*)(slot + 0x1C) = count;
+            if (count > 10) {
+                destroyEffect(i);
+            }
+        }
+    }
+}
+
+// Creature Movement & Step Duration Hook (Matches server monster step duration)
+class NativeCreatureHelper {
+public:
+    void __thiscall Hooked_Walk(int deltaX, int deltaY, int groundSpeed);
+    int __thiscall Hooked_GetAnimationFrame(int animCount);
+};
+
+int __thiscall NativeCreatureHelper::Hooked_GetAnimationFrame(int animCount) {
+    if (animCount <= 1) {
+        return 1;
+    }
+
+    uint8_t* creature = (uint8_t*)this;
+    if (!creature) {
+        return 1;
+    }
+
+    int offsetX = *(int*)(creature + 0x30);
+    int offsetY = *(int*)(creature + 0x34);
+    uint32_t walkStartTime = *(uint32_t*)(creature + 0x38);
+
+    typedef uint32_t(__cdecl* t_GetGameTick)();
+    uint32_t currentTick = ((t_GetGameTick)(g_clientBaseAddr + 0x1414E0))();
+
+    // If standing still (or step movement completed)
+    if (offsetX == 0 && offsetY == 0 && currentTick > walkStartTime) {
+        return 1; // Idle frame (Frame 1)
+    }
+
+    // Creature is currently walking: calculate frame proportional to walked pixels (0..31 pixels)
+    int maxOffset = max(abs(offsetX), abs(offsetY));
+    if (maxOffset > 32) maxOffset = 32;
+    int walkedPixels = 32 - maxOffset; // 0 to 31 pixels traversed
+
+    int movingFrames = animCount - 1; // Number of walking frames
+    if (movingFrames <= 0) {
+        return 1;
+    }
+
+    // Proportional frame calculation across the entire 32-pixel step
+    int movingFrameIndex = (walkedPixels * movingFrames) / 32;
+    if (movingFrameIndex >= movingFrames) {
+        movingFrameIndex = movingFrames - 1;
+    }
+    if (movingFrameIndex < 0) {
+        movingFrameIndex = 0;
+    }
+
+    // Frame 1 is Idle, Frames 2..N are Moving steps (1-indexed)
+    return movingFrameIndex + 2;
+}
+
+void __thiscall NativeCreatureHelper::Hooked_Walk(int deltaX, int deltaY, int groundSpeed) {
+    uint8_t* creature = (uint8_t*)this;
+    if (!creature) return;
+
+    // Determine direction from deltaX and deltaY
+    if (deltaX > 0) {
+        *(int*)(creature + 0x50) = 1; // East
+    } else if (deltaX < 0) {
+        *(int*)(creature + 0x50) = 3; // West
+    } else if (deltaY < 0) {
+        *(int*)(creature + 0x50) = 0; // North
+    } else if (deltaY > 0) {
+        *(int*)(creature + 0x50) = 2; // South
+    }
+
+    // Check prewalk for local player
+    uint32_t localPlayerId = *(uint32_t*)(g_clientBaseAddr + 0x23FE98);
+    uint32_t creatureId = *(uint32_t*)creature;
+
+    if (groundSpeed != 0 && creatureId == localPlayerId) {
+        int preWalkX = *(int*)(g_clientBaseAddr + 0x23FEE8);
+        int preWalkY = *(int*)(g_clientBaseAddr + 0x23FEE4);
+        bool isPreWalk = (preWalkX == deltaX && preWalkY == deltaY);
+        *(int*)(g_clientBaseAddr + 0x23FEE8) = 0;
+        *(int*)(g_clientBaseAddr + 0x23FEE4) = 0;
+        if (isPreWalk) {
+            return;
+        }
+    }
+
+    *(int*)(g_clientBaseAddr + 0x23FEA0) += 1;
+    *(int*)(creature + 0x54) = *(int*)(creature + 0x50); // oldDirection = direction
+
+    int speed = *(int*)(creature + 0x8C);
+    if (speed <= 0) speed = 150;
+    if (groundSpeed <= 0) groundSpeed = 150;
+
+    // Monsters (0x40000000..0x7FFFFFFF) and NPCs (0x80000000+) walk with server pacing (3.0x step duration)
+    bool isMonsterOrNpc = (creatureId >= 0x40000000);
+    double multiplier = isMonsterOrNpc ? 3.0 : 1.0;
+
+    int stepDuration = (int)(((double)(groundSpeed * 1000) / speed) * multiplier);
+    if (stepDuration < 1) stepDuration = 1000;
+
+    int serverBeat = *(int*)(g_clientBaseAddr + 0x23FEEC);
+    if (serverBeat <= 0) serverBeat = 50;
+    stepDuration = ((stepDuration + serverBeat - 1) / serverBeat) * serverBeat;
+
+    *(int*)(creature + 0x30) = -deltaX * 32;
+    *(int*)(creature + 0x34) = -deltaY * 32;
+    *(int*)(creature + 0x40) = abs(deltaX) * 32;
+    *(int*)(creature + 0x44) = abs(deltaY) * 32;
+    *(int*)(creature + 0x48) = stepDuration;
+
+    typedef uint32_t(__cdecl* t_GetGameTick)();
+    uint32_t currentTick = ((t_GetGameTick)(g_clientBaseAddr + 0x1414E0))();
+    *(uint32_t*)(creature + 0x38) = currentTick + stepDuration;
+
+    int diagDuration = stepDuration;
+    if (deltaX != 0 && deltaY != 0) {
+        diagDuration = (int)(((double)(groundSpeed * 3000) / speed) * multiplier);
+        if (diagDuration < 1) diagDuration = 1000;
+    }
+    *(uint32_t*)(creature + 0x3C) = currentTick + diagDuration;
+    *(uint8_t*)(creature + 0x4C) = 1; // isWalking = 1
+}
+
 // Standard OpenTibia RSA Public Key (1024-bit, 309 decimal digits)
 static const char g_openTibiaRSAKey[] =
     "1091201329673994292788609605089955415282375029027981291234687579"
@@ -287,6 +553,11 @@ static void SafeInit() {
         HookCall(g_clientBaseAddr + 0x108F6, g_clientBaseAddr + 0xF9C00);
         OverWriteByte(g_clientBaseAddr + 0x108FC, 0xB7);
     }
+
+    // Weapon Attack Animation Hooks (Effects 304=Sword, 305=Axe, 306=Club, 307, 309=Fist)
+    HookCall(g_clientBaseAddr + 0x104CC, (DWORD)&Hooked_AddMagicEffect);
+    HookCall(g_clientBaseAddr + 0xF25C7, (DWORD)&Hooked_GetMagicEffectSprite);
+    HookCall(g_clientBaseAddr + 0xF338A, (DWORD)&Hooked_GetMagicEffectSprite);
 
     g_newRenderer = (Render_NEW*)calloc(1, sizeof(*g_newRenderer));
     if (g_newRenderer) {
@@ -388,6 +659,28 @@ static void SafeInit() {
     OverWrite(g_clientBaseAddr + 0x98CB1, 0x1288);
     OverWrite(g_clientBaseAddr + 0x99274, 0x1288);
     OverWrite(g_clientBaseAddr + 0x8821F, 0x1288);
+
+    // 7. Hook Creature::walk (0x45DCA0) for monster step duration synchronization
+    union MethodPointer {
+        void (NativeCreatureHelper::*pmfn)(int, int, int);
+        DWORD pAddress;
+    };
+    MethodPointer mp;
+    mp.pmfn = &NativeCreatureHelper::Hooked_Walk;
+    HookJMP(g_clientBaseAddr + 0x5DCA0, mp.pAddress);
+
+    // 8. Hook Creature::getAnimationFrame (0x45E130) for smooth multi-frame outfit animations
+    union MethodPointerAnim {
+        int (NativeCreatureHelper::*pmfn)(int);
+        DWORD pAddress;
+    };
+    MethodPointerAnim mpa;
+    mpa.pmfn = &NativeCreatureHelper::Hooked_GetAnimationFrame;
+    HookJMP(g_clientBaseAddr + 0x5E130, mpa.pAddress);
+
+    // 9. Hook Magic Effects frame calculation (0x4D9DD0) and update loop (0x4E62F0) for real-time 75ms timing
+    HookJMP(g_clientBaseAddr + 0xD9DD0, (DWORD)&Hooked_GetMagicEffectFrame);
+    HookJMP(g_clientBaseAddr + 0xE62F0, (DWORD)&Hooked_UpdateEffects);
 }
 
 static DWORD WINAPI InitThread(LPVOID lpParam) {
