@@ -353,6 +353,36 @@ static void SafeInit() {
     const uint8_t jmpFmtBytes[6] = { 0xE9, 0x0F, 0x01, 0x00, 0x00, 0x90 };
     HookMemory(g_clientBaseAddr + 0x15A02C, jmpFmtBytes, 6);
     OverWrite(g_clientBaseAddr + 0x15A142, (DWORD)g_fmtUnsigned);
+
+    // Patch Outfit Limit & Dialogs.cpp:1612 Assertion Crash [In(AvailableOutfits,1,AVAILABLE_OUTFITS)]
+    // 1. Expand network packet allocation for outfit list:
+    OverWrite(g_clientBaseAddr + 0x13D9C, 0x2000); // Struct buffer (was 0xE4 for 25 outfits -> 0x2000 for 512+)
+    OverWrite(g_clientBaseAddr + 0x13DB0, 0x4000); // Names buffer (was 0x2EE for 25 outfits -> 0x4000 for 512+)
+
+    // 2. Bypass network packet outfit count assertion at 0x413E1A:
+    const uint8_t netAssertJmp[6] = { 0xE9, 0xA6, 0x00, 0x00, 0x00, 0x90 };
+    HookMemory(g_clientBaseAddr + 0x13E1A, netAssertJmp, 6);
+
+    // 3. Expand OutfitDialog object memory allocation size at 0x4A09FC:
+    OverWrite(g_clientBaseAddr + 0xA09FC, 0x5000); // (was 0x644 for 25 outfits -> 0x5000 for 512+)
+
+    // 4. Bypass Dialogs.cpp:1612 assertion at 0x498B92:
+    const uint8_t dlgAssertJmp[6] = { 0xE9, 0xB1, 0x00, 0x00, 0x00, 0x90 };
+    HookMemory(g_clientBaseAddr + 0x98B92, dlgAssertJmp, 6);
+
+    // 5. Remap outfit_addons array displacement from 0x2EC (25 outfits) to 0xA88 (512 outfits):
+    OverWrite(g_clientBaseAddr + 0x98C68, 0xA88);
+    OverWrite(g_clientBaseAddr + 0x98C7F, 0xA88);
+    OverWrite(g_clientBaseAddr + 0x98C9A, 0xA88);
+    OverWrite(g_clientBaseAddr + 0x9920D, 0xA88);
+    OverWrite(g_clientBaseAddr + 0x880BB, 0xA88);
+    OverWrite(g_clientBaseAddr + 0x8818D, 0xA88);
+    OverWrite(g_clientBaseAddr + 0x881B8, 0xA88);
+
+    // 6. Remap outfit_names array displacement from 0x350 (25 outfits) to 0x1288 (512 outfits):
+    OverWrite(g_clientBaseAddr + 0x98CB1, 0x1288);
+    OverWrite(g_clientBaseAddr + 0x99274, 0x1288);
+    OverWrite(g_clientBaseAddr + 0x8821F, 0x1288);
 }
 
 static DWORD WINAPI InitThread(LPVOID lpParam) {

@@ -53,6 +53,7 @@ The original Tibia 8.60 client was released in 2010. While still the most popula
 - **Extended Player Stats**: Extends player health and mana display from `uint16_t` (max 65,535) to full `int32_t` (over 2 billion).
 - **Extended Magic Effects**: Expands effect IDs from `uint8_t` (max 255) to `uint16_t` (max 65,535).
 - **Extended Skills**: Increases skill levels from `uint8_t` (max 255) to `uint16_t`.
+- **Uncapped Outfit Limit (> 25 Outfits)**: Expands the internal outfit list buffer and dialog memory layout from 25 to 512+ outfits, eliminating assertion crashes (`Dialogs.cpp:1612`) and allowing extensive custom outfit rosters.
 - **OpenTibia RSA Key Injection**: Replaces CipSoft's default 1024-bit RSA public key with the standard OpenTibia key, allowing connection to custom servers out-of-the-box.
 
 ### Seamless Modern `.dat` Reader
