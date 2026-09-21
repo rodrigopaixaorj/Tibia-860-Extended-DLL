@@ -279,8 +279,13 @@ static void SafeInit() {
 
     // Limits Patches
     if (g_config.extendedMagicEffects) {
+        // Opcode 131 (0x83) - Magic Effect (uint16)
         HookCall(g_clientBaseAddr + 0x104B4, g_clientBaseAddr + 0xF9C00);
         OverWriteByte(g_clientBaseAddr + 0x104BA, 0xB7);
+
+        // Opcode 133 (0x85) - Distance Shoot / Missile (uint16)
+        HookCall(g_clientBaseAddr + 0x108F6, g_clientBaseAddr + 0xF9C00);
+        OverWriteByte(g_clientBaseAddr + 0x108FC, 0xB7);
     }
 
     g_newRenderer = (Render_NEW*)calloc(1, sizeof(*g_newRenderer));

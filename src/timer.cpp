@@ -17,20 +17,12 @@
 
 static bool g_timerInitialized = false;
 
-uint32_t __cdecl Hooked_GetAnimTick() {
-    // Standard item animation interval: 75 ms per frame
-    return static_cast<uint32_t>(timeGetTime() / 75);
-}
-
 void InitTimerHooks() {
     if (g_config.highResolutionTimer && !g_timerInitialized) {
         // High resolution timer: set OS timer resolution to 1ms
+        // Ensures smooth frame pacing and eliminates Windows 10/11 15.6ms scheduler stutter
         timeBeginPeriod(1);
         g_timerInitialized = true;
-    }
-    if (g_clientBaseAddr) {
-        // Hook 0x51D1B0 (GetAnimTick) to return real-time 75ms animation ticks
-        HookJMP(g_clientBaseAddr + 0x11D1B0, (uintptr_t)&Hooked_GetAnimTick);
     }
 }
 

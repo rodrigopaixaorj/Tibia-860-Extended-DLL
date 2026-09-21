@@ -214,66 +214,127 @@ bool LoadDatFileCustom(const char* datPath) {
             numGroups = static_cast<uint8_t>(fgetc(f));
         }
 
-        bool needCopyToIdle = false;
-        for (uint8_t g = 0; g < numGroups; ++g) {
-            uint8_t groupType = 0;
-            if (category == DAT_THING_CREATURE && hasFrameGroups) {
-                groupType = static_cast<uint8_t>(fgetc(f));
-                if (groupType == 1 && numGroups == 1) {
-                    needCopyToIdle = true;
+        if (category == DAT_THING_CREATURE && hasFrameGroups && numGroups > 1) {
+            struct TempGroup {
+                uint8_t w, h, realSize, layers, px, py, pz, anim;
+                uint32_t* sprites;
+            };
+            std::vector<TempGroup> groups(numGroups);
+
+            for (uint8_t g = 0; g < numGroups; ++g) {
+                uint8_t groupType = static_cast<uint8_t>(fgetc(f));
+                uint8_t w = static_cast<uint8_t>(fgetc(f));
+                uint8_t h = static_cast<uint8_t>(fgetc(f));
+                uint8_t realSize = 32;
+                if (w > 1 || h > 1) {
+                    realSize = static_cast<uint8_t>(fgetc(f));
                 }
-            }
+                uint8_t layers = static_cast<uint8_t>(fgetc(f));
+                uint8_t px = static_cast<uint8_t>(fgetc(f));
+                uint8_t py = static_cast<uint8_t>(fgetc(f));
+                uint8_t pz = static_cast<uint8_t>(fgetc(f));
+                uint8_t anim = static_cast<uint8_t>(fgetc(f));
 
-            uint8_t w = static_cast<uint8_t>(fgetc(f));
-            uint8_t h = static_cast<uint8_t>(fgetc(f));
-            uint8_t realSize = 32;
-            if (w > 1 || h > 1) {
-                realSize = static_cast<uint8_t>(fgetc(f));
-            }
-            uint8_t layers = static_cast<uint8_t>(fgetc(f));
-            uint8_t px = static_cast<uint8_t>(fgetc(f));
-            uint8_t py = static_cast<uint8_t>(fgetc(f));
-            uint8_t pz = static_cast<uint8_t>(fgetc(f));
-            uint8_t anim = static_cast<uint8_t>(fgetc(f));
-
-            if (anim > 1 && hasAnimators) {
-                fgetc(f); // asyncAnim
-                readLE32(f); // loopCount
-                fgetc(f); // startFrame
-                for (int a = 0; a < anim; ++a) {
-                    readLE32(f); // minDur
-                    readLE32(f); // maxDur
-                }
-            }
-
-            uint32_t totalSprites = (uint32_t)w * h * layers * px * py * pz * anim;
-            uint32_t* sprites = (uint32_t*)client_malloc(totalSprites * sizeof(uint32_t));
-            if (!sprites) return false;
-
-            if (isExtendedSprites) {
-                fread(sprites, 4, totalSprites, f);
-            } else {
-                for (uint32_t s = 0; s < totalSprites; ++s) {
-                    sprites[s] = readLE16(f);
-                }
-            }
-
-            bool useThisGroup = false;
-            if (g == 0) {
-                useThisGroup = true;
-            } else if (category == DAT_THING_CREATURE) {
-                // For creatures with multiple FrameGroups (Idle and Moving):
-                // Prefer the Moving group (groupType == 1) or any group with walking animation frames (anim > thing->animCount)
-                if (groupType == 1 || anim > thing->animCount) {
-                    useThisGroup = true;
-                    if (thing->sprites) {
-                        client_free(thing->sprites);
-                        thing->sprites = nullptr;
+                if (anim > 1 && hasAnimators) {
+                    fgetc(f); // asyncAnim
+                    readLE32(f); // loopCount
+                    fgetc(f); // startFrame
+                    for (int a = 0; a < anim; ++a) {
+                        readLE32(f); // minDur
+                        readLE32(f); // maxDur
                     }
                 }
+
+                uint32_t totalSprites = (uint32_t)w * h * layers * px * py * pz * anim;
+                uint32_t* sprites = (uint32_t*)client_malloc(totalSprites * sizeof(uint32_t));
+                if (!sprites) return false;
+
+                if (isExtendedSprites) {
+                    fread(sprites, 4, totalSprites, f);
+                } else {
+                    for (uint32_t s = 0; s < totalSprites; ++s) {
+                        sprites[s] = readLE16(f);
+                    }
+                }
+
+                groups[g] = { w, h, realSize, layers, px, py, pz, anim, sprites };
             }
 
-            if (useThisGroup) {
+            // Combine Group 0 (Idle, anim=1) + Group 1 (Moving, anim=8) into unified 8.60 format:
+            // Frame 1 (index 0) = Idle stance (standing still with legs closed)
+            // Frames 2..N (indices 1..N-1) = Moving steps (walking animation)
+            TempGroup& gIdle = groups[0];
+            TempGroup& gMove = groups[1];
+
+            uint32_t singleFrameSprites = (uint32_t)gIdle.w * gIdle.h * gIdle.layers * gIdle.px * gIdle.py * gIdle.pz;
+            uint32_t combinedAnim = gIdle.anim + gMove.anim;
+            uint32_t combinedTotalSprites = singleFrameSprites * combinedAnim;
+
+            uint32_t* combinedSprites = (uint32_t*)client_malloc(combinedTotalSprites * sizeof(uint32_t));
+            if (combinedSprites) {
+                // Copy Idle sprites (Frame 1)
+                memcpy(combinedSprites, gIdle.sprites, singleFrameSprites * gIdle.anim * sizeof(uint32_t));
+                // Copy Moving sprites (Frames 2..N)
+                memcpy(combinedSprites + (singleFrameSprites * gIdle.anim), gMove.sprites, singleFrameSprites * gMove.anim * sizeof(uint32_t));
+
+                thing->width = gIdle.w;
+                thing->height = gIdle.h;
+                thing->exactSize = gIdle.realSize;
+                thing->layers = gIdle.layers;
+                thing->patternX = gIdle.px;
+                thing->patternY = gIdle.py;
+                thing->patternZ = gIdle.pz;
+                thing->animCount = combinedAnim;
+                thing->sprites = combinedSprites;
+            }
+
+            for (auto& grp : groups) {
+                if (grp.sprites) {
+                    client_free(grp.sprites);
+                }
+            }
+        } else {
+            // Single group parsing (Items, Missiles, Effects, and single-group creatures)
+            for (uint8_t g = 0; g < numGroups; ++g) {
+                uint8_t groupType = 0;
+                if (category == DAT_THING_CREATURE && hasFrameGroups) {
+                    groupType = static_cast<uint8_t>(fgetc(f));
+                }
+
+                uint8_t w = static_cast<uint8_t>(fgetc(f));
+                uint8_t h = static_cast<uint8_t>(fgetc(f));
+                uint8_t realSize = 32;
+                if (w > 1 || h > 1) {
+                    realSize = static_cast<uint8_t>(fgetc(f));
+                }
+                uint8_t layers = static_cast<uint8_t>(fgetc(f));
+                uint8_t px = static_cast<uint8_t>(fgetc(f));
+                uint8_t py = static_cast<uint8_t>(fgetc(f));
+                uint8_t pz = static_cast<uint8_t>(fgetc(f));
+                uint8_t anim = static_cast<uint8_t>(fgetc(f));
+
+                if (anim > 1 && hasAnimators) {
+                    fgetc(f); // asyncAnim
+                    readLE32(f); // loopCount
+                    fgetc(f); // startFrame
+                    for (int a = 0; a < anim; ++a) {
+                        readLE32(f); // minDur
+                        readLE32(f); // maxDur
+                    }
+                }
+
+                uint32_t totalSprites = (uint32_t)w * h * layers * px * py * pz * anim;
+                uint32_t* sprites = (uint32_t*)client_malloc(totalSprites * sizeof(uint32_t));
+                if (!sprites) return false;
+
+                if (isExtendedSprites) {
+                    fread(sprites, 4, totalSprites, f);
+                } else {
+                    for (uint32_t s = 0; s < totalSprites; ++s) {
+                        sprites[s] = readLE16(f);
+                    }
+                }
+
                 thing->width = w;
                 thing->height = h;
                 thing->exactSize = realSize;
@@ -283,8 +344,6 @@ bool LoadDatFileCustom(const char* datPath) {
                 thing->patternZ = pz;
                 thing->animCount = anim;
                 thing->sprites = sprites;
-            } else {
-                client_free(sprites);
             }
         }
         return true;
