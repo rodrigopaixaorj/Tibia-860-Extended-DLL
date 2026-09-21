@@ -33,6 +33,8 @@ private:
 };
 
 extern Sprites* g_spritesFile;
+extern bool g_sprHasAlpha;
+extern uint32_t g_numSprites;
 
 uint32_t HookPointers();
 uint32_t HookSignature();

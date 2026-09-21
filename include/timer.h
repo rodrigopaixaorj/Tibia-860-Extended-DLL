@@ -14,6 +14,6 @@
 #include <cstdint>
 
 void InitTimerHooks();
-DWORD WINAPI HookedTimeGetTime();
+void ShutdownTimerHooks();
 
 #endif // __TIMER_H__

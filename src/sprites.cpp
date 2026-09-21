@@ -10,8 +10,13 @@
 #include "sprites.h"
 #include "main.h"
 #include "config.h"
+#include <vector>
+#include <cstdlib>
+#include <cstring>
 
 Sprites* g_spritesFile = nullptr;
+bool g_sprHasAlpha = false;
+uint32_t g_numSprites = 0;
 
 Sprites::Sprites(const char* filename, const char* readType) {
     m_loaded = false;
@@ -99,6 +104,61 @@ uint32_t HookPointers() {
     return v;
 }
 
+static void DetectSprFormat(uint32_t numSprites) {
+    if (!g_spritesFile || numSprites == 0) return;
+
+    for (uint32_t s = 1; s <= numSprites && s <= 50; ++s) {
+        g_spritesFile->sprSeek((g_config.extendedSprites ? 8 : 6) + (s - 1) * 4);
+        uint32_t offset = 0;
+        g_spritesFile->sprRead(&offset, 4);
+        if (offset == 0) continue;
+
+        g_spritesFile->sprSeek(offset + 3); // Skip RGB color key
+        uint16_t sprSize = 0;
+        g_spritesFile->sprRead(&sprSize, 2);
+        if (sprSize == 0 || sprSize > 8192) continue;
+
+        std::vector<uint8_t> sprData(sprSize);
+        g_spritesFile->sprRead(sprData.data(), sprSize);
+
+        // Test 3-byte RGB
+        size_t p3 = 0;
+        bool ok3 = true;
+        while (p3 < sprSize) {
+            if (p3 + 2 > sprSize) { ok3 = false; break; }
+            p3 += 2; // transparent count
+            if (p3 >= sprSize) break;
+            if (p3 + 2 > sprSize) { ok3 = false; break; }
+            uint16_t colored = *(uint16_t*)&sprData[p3];
+            p3 += 2;
+            if (p3 + (size_t)colored * 3 > sprSize) { ok3 = false; break; }
+            p3 += (size_t)colored * 3;
+        }
+        if (ok3 && p3 == sprSize) {
+            g_sprHasAlpha = false;
+            return;
+        }
+
+        // Test 4-byte RGBA
+        size_t p4 = 0;
+        bool ok4 = true;
+        while (p4 < sprSize) {
+            if (p4 + 2 > sprSize) { ok4 = false; break; }
+            p4 += 2; // transparent count
+            if (p4 >= sprSize) break;
+            if (p4 + 2 > sprSize) { ok4 = false; break; }
+            uint16_t colored = *(uint16_t*)&sprData[p4];
+            p4 += 2;
+            if (p4 + (size_t)colored * 4 > sprSize) { ok4 = false; break; }
+            p4 += (size_t)colored * 4;
+        }
+        if (ok4 && p4 == sprSize) {
+            g_sprHasAlpha = true;
+            return;
+        }
+    }
+}
+
 uint32_t HookNumSprites() {
     uint32_t numSprites = 0;
 
@@ -114,6 +174,13 @@ uint32_t HookNumSprites() {
             g_spritesFile->sprRead(&u16Read, 2);
             numSprites = u16Read;
         }
+        g_numSprites = numSprites;
+
+        // Auto-detect whether sprites in Tibia.spr use 3-byte (RGB) or 4-byte (RGBA) pixels
+        DetectSprFormat(numSprites);
+
+        // Restore file pointer to the start of the sprite offset table
+        g_spritesFile->sprSeek(g_config.extendedSprites ? 8 : 6);
     } else {
         MessageBoxA(NULL, "Cannot read client .spr file.", PROJECT_NAME, MB_OK | MB_ICONERROR);
         ExitProcess(1);
@@ -123,24 +190,33 @@ uint32_t HookNumSprites() {
 }
 
 unsigned char* LoadSpriteAlpha(uint32_t sprite) {
-    unsigned char* pixels = (unsigned char*)malloc(4096);
+    unsigned char* pixels = (unsigned char*)calloc(1, 4096);
     if (!pixels) return nullptr;
 
-    for (int i = 0; i < 1024; ++i) {
-        pixels[i * 4 + 3] = 0x00;
+    if (sprite == 0 || !g_clientPointerTransPixels) {
+        return pixels;
     }
 
-    uint32_t pointer = *(uint32_t*)(g_clientPointerTransPixels - 0x10 + sprite * 0x10);
-    if (pointer == 0 || !g_spritesFile) {
+    uint8_t* spriteTable = *(uint8_t**)g_clientPointerTransPixels;
+    if (!spriteTable || !g_spritesFile) {
+        return pixels;
+    }
+
+    if (g_numSprites > 0 && sprite > g_numSprites) {
+        return pixels;
+    }
+
+    uint32_t* transPixels = (uint32_t*)(spriteTable + (sprite - 1) * 0x10);
+    uint32_t pointer = transPixels[0];
+    if (pointer == 0) {
         return pixels;
     }
 
     g_spritesFile->sprSeek(pointer);
 
-    // Ignore color key
-    g_spritesFile->sprGetC();
-    g_spritesFile->sprGetC();
-    g_spritesFile->sprGetC();
+    unsigned char ckR = g_spritesFile->sprGetC();
+    unsigned char ckG = g_spritesFile->sprGetC();
+    unsigned char ckB = g_spritesFile->sprGetC();
 
     uint16_t sprSize = 0;
     g_spritesFile->sprRead(&sprSize, 2);
@@ -148,30 +224,44 @@ unsigned char* LoadSpriteAlpha(uint32_t sprite) {
         return pixels;
     }
 
-    uint32_t writeData = 0, readData = 0;
-    uint16_t numPix = 0;
-    bool state = false;
+    uint32_t readData = 0;
+    int pixelIndex = 0;
 
-    while (readData < sprSize) {
-        g_spritesFile->sprRead(&numPix, 2);
+    while (readData < sprSize && pixelIndex < 1024) {
+        if (readData + 2 > sprSize) break;
+        uint16_t numTransparent = 0;
+        g_spritesFile->sprRead(&numTransparent, 2);
         readData += 2;
-        if (state) {
-            for (int i = 0; i < numPix && writeData + 3 < 4096; ++i) {
-                pixels[writeData++] = g_spritesFile->sprGetC();
-                pixels[writeData++] = g_spritesFile->sprGetC();
-                pixels[writeData++] = g_spritesFile->sprGetC();
-                readData += 3;
-                if (g_config.alphaTransparency) {
-                    pixels[writeData++] = g_spritesFile->sprGetC();
-                    readData++;
-                } else {
-                    pixels[writeData++] = 0xFF;
+        pixelIndex += numTransparent;
+
+        if (readData >= sprSize || pixelIndex >= 1024) break;
+
+        if (readData + 2 > sprSize) break;
+        uint16_t numColored = 0;
+        g_spritesFile->sprRead(&numColored, 2);
+        readData += 2;
+
+        for (int i = 0; i < numColored; ++i) {
+            unsigned char r = g_spritesFile->sprGetC();
+            unsigned char g = g_spritesFile->sprGetC();
+            unsigned char b = g_spritesFile->sprGetC();
+            readData += 3;
+            unsigned char a = 0xFF;
+            if (g_sprHasAlpha) {
+                a = g_spritesFile->sprGetC();
+                readData++;
+            } else {
+                if (r == ckR && g == ckG && b == ckB) {
+                    a = 0x00;
                 }
             }
-            state = false;
-        } else {
-            writeData += numPix * 4;
-            state = true;
+            if (pixelIndex < 1024) {
+                pixels[pixelIndex * 4 + 0] = r;
+                pixels[pixelIndex * 4 + 1] = g;
+                pixels[pixelIndex * 4 + 2] = b;
+                pixels[pixelIndex * 4 + 3] = a;
+            }
+            pixelIndex++;
         }
     }
 
@@ -179,7 +269,20 @@ unsigned char* LoadSpriteAlpha(uint32_t sprite) {
 }
 
 void HookLoadSprite(uint32_t sprite, unsigned char* pixels) {
-    uint32_t* transPixels = (uint32_t*)(g_clientPointerTransPixels - 0x10 + sprite * 0x10);
+    if (sprite == 0 || !g_clientPointerTransPixels) {
+        return;
+    }
+
+    uint8_t* spriteTable = *(uint8_t**)g_clientPointerTransPixels;
+    if (!spriteTable) {
+        return;
+    }
+
+    if (g_numSprites > 0 && sprite > g_numSprites) {
+        return;
+    }
+
+    uint32_t* transPixels = (uint32_t*)(spriteTable + (sprite - 1) * 0x10);
     if (transPixels[0] == 0 || !g_spritesFile) {
         transPixels[1] = 0xFF;
         transPixels[2] = 0x00;
@@ -211,28 +314,38 @@ void HookLoadSprite(uint32_t sprite, unsigned char* pixels) {
     g_spritesFile->sprRead(&sprSize, 2);
     if (sprSize == 0) return;
 
-    uint32_t writeData = 0, readData = 0;
-    uint16_t numPix = 0;
-    bool state = false;
+    uint32_t readData = 0;
+    int pixelIndex = 0;
 
-    while (readData < sprSize && writeData < 3072) {
-        g_spritesFile->sprRead(&numPix, 2);
+    while (readData < sprSize && pixelIndex < 1024) {
+        if (readData + 2 > sprSize) break;
+        uint16_t numTransparent = 0;
+        g_spritesFile->sprRead(&numTransparent, 2);
         readData += 2;
-        if (state) {
-            for (int i = 0; i < numPix && writeData + 2 < 3072; ++i) {
-                pixels[writeData++] = g_spritesFile->sprGetC();
-                pixels[writeData++] = g_spritesFile->sprGetC();
-                pixels[writeData++] = g_spritesFile->sprGetC();
-                readData += 3;
-                if (g_config.alphaTransparency) {
-                    g_spritesFile->sprGetC();
-                    readData++;
-                }
+        pixelIndex += numTransparent;
+
+        if (readData >= sprSize || pixelIndex >= 1024) break;
+
+        if (readData + 2 > sprSize) break;
+        uint16_t numColored = 0;
+        g_spritesFile->sprRead(&numColored, 2);
+        readData += 2;
+
+        for (int i = 0; i < numColored; ++i) {
+            unsigned char r = g_spritesFile->sprGetC();
+            unsigned char g = g_spritesFile->sprGetC();
+            unsigned char b = g_spritesFile->sprGetC();
+            readData += 3;
+            if (g_sprHasAlpha) {
+                g_spritesFile->sprGetC();
+                readData++;
             }
-            state = false;
-        } else {
-            writeData += numPix * 3;
-            state = true;
+            if (pixelIndex < 1024) {
+                pixels[pixelIndex * 3 + 0] = r;
+                pixels[pixelIndex * 3 + 1] = g;
+                pixels[pixelIndex * 3 + 2] = b;
+            }
+            pixelIndex++;
         }
     }
 }

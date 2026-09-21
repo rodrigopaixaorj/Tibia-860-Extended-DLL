@@ -45,6 +45,7 @@ set(SOURCES
     src/creature_manager.cpp
     src/network_protocol.cpp
     src/ui_market.cpp
+    src/market_window.cpp
     src/timer.cpp
     src/dat_reader.cpp
 )
@@ -59,6 +60,7 @@ set(HEADERS
     include/creature_manager.h
     include/network_protocol.h
     include/ui_market.h
+    include/market_window.h
     include/timer.h
     include/dat_reader.h
 )

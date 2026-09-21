@@ -13,10 +13,11 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <map>
 #include <mutex>
 
 // ===================================================================
-// Market System Structures Faithful to The-Forgotten-Client (TFC)
+// Market System Structures
 // ===================================================================
 
 struct MarketItem {
@@ -74,16 +75,55 @@ public:
     void close();
     bool isOpen() const { return m_isOpen; }
 
-    void addBuyOffer(const MarketOffer& offer);
-    void addSellOffer(const MarketOffer& offer);
+    // Data update methods (called by network_protocol.cpp)
     void clearOffers();
-
     void setAccountBalance(uint32_t balance) { m_accountBalance = balance; }
     uint32_t getAccountBalance() const { return m_accountBalance; }
+    void setCoins(uint32_t coins) { m_coins = coins; }
+    uint32_t getCoins() const { return m_coins; }
 
-    void registerMarketItem(uint16_t tradeAs, const std::string& name, uint16_t category, uint16_t reqLvl, uint16_t reqVoc);
-    void parseMarketData(const uint8_t* buffer, size_t size);
+    void updateDepotItems(const std::map<uint16_t, uint32_t>& items);
+    void updateMyOffers(const std::vector<MarketOffer>& buyOffers,
+                        const std::vector<MarketOffer>& sellOffers);
+    void updateHistory(const std::vector<MarketOffer>& buyOffers,
+                       const std::vector<MarketOffer>& sellOffers);
+    void updateOffers(uint16_t itemId,
+                      const std::vector<MarketOffer>& buyOffers,
+                      const std::vector<MarketOffer>& sellOffers);
+    void updateDetail(uint16_t itemId,
+                      const std::string strings[], int numStrings,
+                      bool hasBuyStats, uint32_t buyTx, uint32_t buyHigh,
+                      uint32_t buyTotal, uint32_t buyLow,
+                      bool hasSellStats, uint32_t sellTx, uint32_t sellHigh,
+                      uint32_t sellTotal, uint32_t sellLow);
+
+    // Client->server send helpers
+    void sendBrowse(uint16_t itemId) const;
+    void sendBrowseOwnOffers() const;
+    void sendBrowseOwnHistory() const;
+    void sendCreateOffer(uint8_t type, uint16_t itemId, uint16_t amount,
+                         uint32_t price, bool anonymous) const;
+    void sendCancelOffer(uint32_t timestamp, uint16_t counter) const;
+    void sendAcceptOffer(uint32_t timestamp, uint16_t counter, uint16_t amount) const;
+    void sendLeave() const;
+
+    // Market item registration (from DAT/item data)
+    void registerMarketItem(uint16_t tradeAs, const std::string& name,
+                            uint16_t category, uint16_t reqLvl, uint16_t reqVoc);
+
+    // Render (called each frame when open)
     void render();
+
+    // Getters for UI
+    const std::vector<MarketOffer>& getBuyOffers() const  { return m_browseItemBuyOffers; }
+    const std::vector<MarketOffer>& getSellOffers() const { return m_browseItemSellOffers; }
+    const std::vector<MarketOffer>& getMyBuyOffers() const  { return m_myBuyOffers; }
+    const std::vector<MarketOffer>& getMySellOffers() const { return m_mySellOffers; }
+    const std::vector<MarketOffer>& getBuyHistory() const  { return m_historyBuy; }
+    const std::vector<MarketOffer>& getSellHistory() const { return m_historySell; }
+    const std::map<uint16_t, uint32_t>& getDepotItems() const { return m_depotItems; }
+    const MarketDetail& getCurrentDetail() const { return m_currentDetail; }
+    uint16_t getCurrentBrowseItem() const { return m_currentBrowseItem; }
 
 private:
     MarketSystem() = default;
@@ -91,12 +131,20 @@ private:
 
     bool m_isOpen = false;
     uint32_t m_accountBalance = 0;
+    uint32_t m_coins = 0;
+    uint16_t m_currentBrowseItem = 0;
 
-    std::vector<MarketOffer> m_buyOffers;
-    std::vector<MarketOffer> m_sellOffers;
-    std::vector<MarketOffer> m_myOffers;
-    std::vector<MarketOffer> m_myHistory;
-    std::vector<MarketItem>  m_marketItems;
+    std::vector<MarketOffer> m_browseItemBuyOffers;
+    std::vector<MarketOffer> m_browseItemSellOffers;
+    std::vector<MarketOffer> m_myBuyOffers;
+    std::vector<MarketOffer> m_mySellOffers;
+    std::vector<MarketOffer> m_historyBuy;
+    std::vector<MarketOffer> m_historySell;
+
+    std::map<uint16_t, uint32_t> m_depotItems;
+    std::vector<MarketItem>      m_marketItems;
+
+    MarketDetail m_currentDetail;
 
     std::mutex m_mutex;
 };
@@ -104,3 +152,4 @@ private:
 void InitMarketHooks();
 
 #endif // __UI_MARKET_H__
+

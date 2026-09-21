@@ -16,6 +16,7 @@
 #include "creature_manager.h"
 #include "network_protocol.h"
 #include "ui_market.h"
+#include "market_window.h"
 #include "timer.h"
 #include "dat_reader.h"
 
@@ -65,6 +66,21 @@ static DWORD HookExtendedEngine() {
     } else {
         return GetEngineAddr ? GetEngineAddr() : 0;
     }
+}
+
+static DWORD HookEnginePresent() {
+    if (InGameMarket::IsOpen()) {
+        HWND hTibia = FindWindowA("TibiaClient", NULL);
+        if (hTibia) {
+            RECT rc;
+            if (GetClientRect(hTibia, &rc)) {
+                int sW = rc.right - rc.left;
+                int sH = rc.bottom - rc.top;
+                InGameMarket::Render(0, sW, sH);
+            }
+        }
+    }
+    return GetEngineAddr ? GetEngineAddr() : 0;
 }
 
 static bool __stdcall HookCreateGLContext() {
@@ -148,10 +164,24 @@ static void HookDrawManaBar(int nSurface, int X, int Y, int W, int H, int SkinId
     sprintf_s(tmpBuff, sizeof(tmpBuff), "%d%%", static_cast<int32_t>(100 * tmp_float));
     if (DrawSkin) DrawSkin(nSurface, X, Y, W, H, SkinId, dX, dY);
     if (PrintText) PrintText(nSurface, X + 45, Y, 2, 180, 180, 180, tmpBuff, 1);
+
+    if (InGameMarket::IsOpen()) {
+        HWND hTibia = FindWindowA("TibiaClient", NULL);
+        if (hTibia) {
+            RECT rc;
+            if (GetClientRect(hTibia, &rc)) {
+                int sW = rc.right - rc.left;
+                int sH = rc.bottom - rc.top;
+                InGameMarket::Render(nSurface, sW, sH);
+            }
+        }
+    }
 }
 
 static void __stdcall MyDrawHPBar(DWORD nSurface, DWORD X, DWORD Y, DWORD W, DWORD creaturePointer, DWORD nRed, DWORD nGreen, DWORD nBlue) {
     if (nRed == 0 && nGreen == 0 && nBlue == 0) return;
+    if (creaturePointer < 0x10000 || IsBadReadPtr((void*)creaturePointer, sizeof(DWORD))) return;
+
     DWORD creatureId = *(DWORD*)creaturePointer;
     if (creatureId >= 0x80000000) return; // NPC
 
@@ -237,10 +267,8 @@ static void SafeInit() {
     HookCall(g_clientBaseAddr + 0x340C4, (DWORD)&HookDrawHealthBar);
     HookCall(g_clientBaseAddr + 0x34276, (DWORD)&HookDrawManaBar);
 
-    // High resolution timer hook
-    if (g_config.highResolutionTimer) {
-        OverWrite(g_clientBaseAddr + 0x1B85A0, (DWORD)&HookedTimeGetTime);
-    }
+    // High resolution timer (sets 1ms precision via timeBeginPeriod)
+    InitTimerHooks();
 
     // DirectDraw 7 Upgrade
     OverWrite(g_clientBaseAddr + 0x1D8840, 0x15E65EC0);
@@ -255,23 +283,6 @@ static void SafeInit() {
         OverWriteByte(g_clientBaseAddr + 0x104BA, 0xB7);
     }
 
-    if (g_config.extendedPlayerStats) {
-        HookCall(g_clientBaseAddr + 0x11D2B, g_clientBaseAddr + 0xF9DA0);
-        OverWrite(g_clientBaseAddr + 0x11D30, 0x8990F08B);
-        HookCall(g_clientBaseAddr + 0x11D36, g_clientBaseAddr + 0xF9DA0);
-        OverWrite(g_clientBaseAddr + 0x11D3B, 0x8990F88B);
-
-        HookCall(g_clientBaseAddr + 0x11D69, g_clientBaseAddr + 0xF9DA0);
-        OverWrite(g_clientBaseAddr + 0x11D6E, 0x8990D08B);
-        HookCall(g_clientBaseAddr + 0x11D74, g_clientBaseAddr + 0xF9DA0);
-        OverWrite(g_clientBaseAddr + 0x11D79, 0x89909090);
-    }
-
-    if (g_config.extendedPlayerSkills) {
-        HookCall(g_clientBaseAddr + 0x11FA4, g_clientBaseAddr + 0xF9C00);
-        OverWriteByte(g_clientBaseAddr + 0x11FAA, 0xB7);
-    }
-
     g_newRenderer = (Render_NEW*)calloc(1, sizeof(*g_newRenderer));
     if (g_newRenderer) {
         if (g_config.drawManaBar) {
@@ -281,7 +292,7 @@ static void SafeInit() {
             HookCall(g_clientBaseAddr + 0xF5875, (DWORD)&HPBarRenderHandle);
             HookCall(g_clientBaseAddr + 0xF5922, (DWORD)&HPBarRenderHandle);
             OverWriteWord(g_clientBaseAddr + 0xF57D8, 0xFFD0);
-            OverWriteWord(g_clientBaseAddr + 0xF5912, 0xFFD0);
+            OverWriteWord(g_clientBaseAddr + 0xF59B0, 0xFFD0);
         }
 
         if (g_config.alphaTransparency) {
@@ -323,6 +334,25 @@ static void SafeInit() {
     InitCreatureHooks();
     InitNetworkHooks();
     InitMarketHooks();
+
+    // Hook Frame Present (renders in-game Market every single frame without needing window resize)
+    HookCall(g_clientBaseAddr + 0x5A34A, (DWORD)&HookEnginePresent);
+
+    // Patch ContentWindows.cpp:2460 Experience Underflow crash [bug0000996]
+    // In Tibia 8.60 (0x4377D0), "cmp dword ptr [edi], ebx; jge 0x43793B" (0F 8D 63 01 00 00, 6 bytes)
+    // Characters with experience >= 2,147,483,648 (or 64-bit exp) trigger an underflow assertion crash.
+    // Replace with "jmp 0x43793B; nop" (E9 64 01 00 00 90, exactly 6 bytes)
+    const uint8_t jmpBytes[6] = { 0xE9, 0x64, 0x01, 0x00, 0x00, 0x90 };
+    HookMemory(g_clientBaseAddr + 0x377D2, jmpBytes, 6);
+
+    // Patch ContentWindows.cpp:2206 / Utils.cpp:659 (Experience / Number >= 2,147,483,648 crash)
+    // In formatNumberWithCommas (0x559EF0), line 0x55A02C checks "cmp edi, 0; jge 0x55A140" (0F 8D 0E 01 00 00).
+    // Large unsigned numbers (e.g. experience >= 2.14B) are treated as negative, failing assertion "Number >= 0".
+    // Replace with "jmp 0x55A140; nop" (E9 0F 01 00 00 90, 6 bytes) and format with "%u" instead of "%d".
+    static const char g_fmtUnsigned[] = "%u";
+    const uint8_t jmpFmtBytes[6] = { 0xE9, 0x0F, 0x01, 0x00, 0x00, 0x90 };
+    HookMemory(g_clientBaseAddr + 0x15A02C, jmpFmtBytes, 6);
+    OverWrite(g_clientBaseAddr + 0x15A142, (DWORD)g_fmtUnsigned);
 }
 
 static DWORD WINAPI InitThread(LPVOID lpParam) {
@@ -342,6 +372,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
             CloseHandle(hThread);
         }
     } else if (fdwReason == DLL_PROCESS_DETACH) {
+        ShutdownTimerHooks();
         FreeDirectDrawProxy();
     }
     return TRUE;

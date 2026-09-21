@@ -9,30 +9,34 @@
 
 #include "timer.h"
 #include "config.h"
+#include "hook.h"
+#include "main.h"
+#include <mmsystem.h>
 
-static LARGE_INTEGER g_frequency;
-static LARGE_INTEGER g_startTime;
+#pragma comment(lib, "winmm.lib")
+
 static bool g_timerInitialized = false;
 
-DWORD WINAPI HookedTimeGetTime() {
-    if (!g_timerInitialized) {
-        QueryPerformanceFrequency(&g_frequency);
-        QueryPerformanceCounter(&g_startTime);
-        g_timerInitialized = true;
-    }
-
-    LARGE_INTEGER currentTime;
-    QueryPerformanceCounter(&currentTime);
-
-    LONGLONG elapsed = currentTime.QuadPart - g_startTime.QuadPart;
-    return static_cast<DWORD>((elapsed * 1000) / g_frequency.QuadPart);
+uint32_t __cdecl Hooked_GetAnimTick() {
+    // Standard item animation interval: 75 ms per frame
+    return static_cast<uint32_t>(timeGetTime() / 75);
 }
 
 void InitTimerHooks() {
-    if (g_config.highResolutionTimer) {
-        // Replace native timeGetTime if configured
-        QueryPerformanceFrequency(&g_frequency);
-        QueryPerformanceCounter(&g_startTime);
+    if (g_config.highResolutionTimer && !g_timerInitialized) {
+        // High resolution timer: set OS timer resolution to 1ms
+        timeBeginPeriod(1);
         g_timerInitialized = true;
+    }
+    if (g_clientBaseAddr) {
+        // Hook 0x51D1B0 (GetAnimTick) to return real-time 75ms animation ticks
+        HookJMP(g_clientBaseAddr + 0x11D1B0, (uintptr_t)&Hooked_GetAnimTick);
+    }
+}
+
+void ShutdownTimerHooks() {
+    if (g_timerInitialized) {
+        timeEndPeriod(1);
+        g_timerInitialized = false;
     }
 }

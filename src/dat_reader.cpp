@@ -214,10 +214,14 @@ bool LoadDatFileCustom(const char* datPath) {
             numGroups = static_cast<uint8_t>(fgetc(f));
         }
 
+        bool needCopyToIdle = false;
         for (uint8_t g = 0; g < numGroups; ++g) {
             uint8_t groupType = 0;
             if (category == DAT_THING_CREATURE && hasFrameGroups) {
                 groupType = static_cast<uint8_t>(fgetc(f));
+                if (groupType == 1 && numGroups == 1) {
+                    needCopyToIdle = true;
+                }
             }
 
             uint8_t w = static_cast<uint8_t>(fgetc(f));
@@ -254,7 +258,22 @@ bool LoadDatFileCustom(const char* datPath) {
                 }
             }
 
-            if (g == 0 || groupType == 0) {
+            bool useThisGroup = false;
+            if (g == 0) {
+                useThisGroup = true;
+            } else if (category == DAT_THING_CREATURE) {
+                // For creatures with multiple FrameGroups (Idle and Moving):
+                // Prefer the Moving group (groupType == 1) or any group with walking animation frames (anim > thing->animCount)
+                if (groupType == 1 || anim > thing->animCount) {
+                    useThisGroup = true;
+                    if (thing->sprites) {
+                        client_free(thing->sprites);
+                        thing->sprites = nullptr;
+                    }
+                }
+            }
+
+            if (useThisGroup) {
                 thing->width = w;
                 thing->height = h;
                 thing->exactSize = realSize;
