@@ -39,7 +39,6 @@ set(SOURCES
     src/dllmain.cpp
     src/ddraw_proxy.cpp
     src/hook.cpp
-    src/config.cpp
     src/sprites.cpp
     src/ext_engines.cpp
     src/creature_manager.cpp
@@ -52,9 +51,10 @@ set(SOURCES
 
 set(HEADERS
     include/main.h
+    include/features.h
+    include/config.h
     include/ddraw_proxy.h
     include/hook.h
-    include/config.h
     include/sprites.h
     include/ext_engines.h
     include/creature_manager.h

@@ -481,7 +481,6 @@ static const char g_openTibiaRSAKey[] =
     "07119674283982419152118103759076030616683978566631413";
 
 static void SafeInit() {
-    LoadConfig("config.ini");
     InitDirectDrawProxy();
 
     HANDLE baseHandle = GetModuleHandle(NULL);
