@@ -45,6 +45,7 @@ set(SOURCES
     src/network_protocol.cpp
     src/ui_market.cpp
     src/market_window.cpp
+    src/outfit_window.cpp
     src/timer.cpp
     src/dat_reader.cpp
 )
@@ -61,6 +62,7 @@ set(HEADERS
     include/network_protocol.h
     include/ui_market.h
     include/market_window.h
+    include/outfit_window.h
     include/timer.h
     include/dat_reader.h
 )

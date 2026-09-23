@@ -15,6 +15,17 @@
 #include <cstdio>
 #include <vector>
 #include <string>
+#include <unordered_map>
+
+static std::unordered_map<uint16_t, CreatureFrameGroupInfo> g_creatureFrameGroups;
+
+CreatureFrameGroupInfo GetCreatureFrameGroupInfo(uint16_t lookType) {
+    auto it = g_creatureFrameGroups.find(lookType);
+    if (it != g_creatureFrameGroups.end()) {
+        return it->second;
+    }
+    return { 1, 0 };
+}
 
 typedef void* (__cdecl *_client_malloc)(size_t size);
 typedef void  (__cdecl *_client_free)(void* ptr);
@@ -53,6 +64,7 @@ bool LoadDatFileCustom(const char* datPath) {
     if (ClearDatData) {
         ClearDatData();
     }
+    g_creatureFrameGroups.clear();
 
     uint32_t signature = readLE32(f);
     uint16_t itemsCount = readLE16(f);
@@ -217,6 +229,7 @@ bool LoadDatFileCustom(const char* datPath) {
         if (category == DAT_THING_CREATURE && hasFrameGroups && numGroups > 1) {
             struct TempGroup {
                 uint8_t w, h, realSize, layers, px, py, pz, anim;
+                uint32_t animDur;
                 uint32_t* sprites;
             };
             std::vector<TempGroup> groups(numGroups);
@@ -235,15 +248,18 @@ bool LoadDatFileCustom(const char* datPath) {
                 uint8_t pz = static_cast<uint8_t>(fgetc(f));
                 uint8_t anim = static_cast<uint8_t>(fgetc(f));
 
+                uint32_t totalMinDur = 0;
                 if (anim > 1 && hasAnimators) {
                     fgetc(f); // asyncAnim
                     readLE32(f); // loopCount
                     fgetc(f); // startFrame
                     for (int a = 0; a < anim; ++a) {
-                        readLE32(f); // minDur
+                        uint32_t minDur = readLE32(f); // minDur
                         readLE32(f); // maxDur
+                        totalMinDur += minDur;
                     }
                 }
+                uint32_t avgDur = (anim > 0 && totalMinDur > 0) ? (totalMinDur / anim) : (anim > 1 ? 150 : 0);
 
                 uint32_t totalSprites = (uint32_t)w * h * layers * px * py * pz * anim;
                 uint32_t* sprites = (uint32_t*)client_malloc(totalSprites * sizeof(uint32_t));
@@ -257,7 +273,7 @@ bool LoadDatFileCustom(const char* datPath) {
                     }
                 }
 
-                groups[g] = { w, h, realSize, layers, px, py, pz, anim, sprites };
+                groups[g] = { w, h, realSize, layers, px, py, pz, anim, avgDur, sprites };
             }
 
             // Combine Group 0 (Idle, anim=1) + Group 1 (Moving, anim=8) into unified 8.60 format:
@@ -286,6 +302,9 @@ bool LoadDatFileCustom(const char* datPath) {
                 thing->patternZ = gIdle.pz;
                 thing->animCount = combinedAnim;
                 thing->sprites = combinedSprites;
+
+                uint32_t idleDur = gIdle.animDur > 0 ? gIdle.animDur : 150;
+                g_creatureFrameGroups[thingId] = { gIdle.anim, gMove.anim, idleDur };
             }
 
             for (auto& grp : groups) {
@@ -372,6 +391,10 @@ bool LoadDatFileCustom(const char* datPath) {
                 thing->patternZ = pz;
                 thing->animCount = anim;
                 thing->sprites = sprites;
+
+                if (category == DAT_THING_CREATURE) {
+                    g_creatureFrameGroups[thingId] = { 1, (uint8_t)(anim > 1 ? anim - 1 : 0) };
+                }
             }
         }
         return true;

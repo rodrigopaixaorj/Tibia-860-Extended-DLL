@@ -503,17 +503,10 @@ static int __cdecl Hooked_ReadCreatureLightLevel() {
 }
 
 static uint16_t __cdecl Hooked_ReadCreatureSpeed() {
-    uint16_t rawSpeed = ReadNetworkU16();
-    if (rawSpeed == 0) return 0;
-    // Tibia New Speed Law formula:
-    // speedA = 857.36, speedB = 261.29, speedC = -4795.01
-    // Server sends speed / 2; calculate real formulated speed:
-    double formulated = std::floor((857.36 * std::log(static_cast<double>(rawSpeed) + 261.29) - 4795.01) + 0.5);
-    if (formulated < 1.0) {
-        formulated = 1.0;
-    }
-    return static_cast<uint16_t>(formulated);
+    // Return raw speed directly as sent by TFS server (New Speed Law disabled to match TFS and TFC)
+    return ReadNetworkU16();
 }
+
 
 static void __cdecl Hooked_ParseCreatureOutfit() {
     uint8_t* pBuffer = *(uint8_t**)(g_clientBaseAddr + 0x3998AC);
@@ -554,6 +547,9 @@ static void __cdecl Hooked_ParseCreatureOutfit() {
     }
 }
 
+#include "outfit_window.h"
+#include "features.h"
+
 // Opcode 200 (0xC8): Open Outfit Window
 static void __cdecl Hooked_ParseOutfitWindow() {
     uint16_t lookType = ReadNetworkU16();
@@ -563,7 +559,7 @@ static void __cdecl Hooked_ParseOutfitWindow() {
     uint8_t feet   = static_cast<uint8_t>(ReadNetworkByte());
     uint8_t addons = static_cast<uint8_t>(ReadNetworkByte());
 
-    // Read current mount if sent by TFS (GAME_FEATURE_MOUNTS)
+    // Read current mount sent by TFS (GAME_FEATURE_MOUNTS)
     uint16_t lookMount = ReadNetworkU16();
     uint8_t mountHead = 0, mountBody = 0, mountLegs = 0, mountFeet = 0;
     if (lookMount != 0) {
@@ -573,26 +569,9 @@ static void __cdecl Hooked_ParseOutfitWindow() {
         mountFeet = static_cast<uint8_t>(ReadNetworkByte());
     }
 
-    // Save local player mount
-    if (g_clientBaseAddr) {
-        uint32_t* pPlayerId = (uint32_t*)(g_clientBaseAddr + 0x23FE98);
-        if (pPlayerId && *pPlayerId) {
-            if (lookMount != 0) {
-                CreatureManager::get().setMount(*pPlayerId, lookMount, mountHead, mountBody, mountLegs, mountFeet);
-            } else {
-                CreatureManager::get().removeMount(*pPlayerId);
-            }
-        }
-    }
-
     // Read available outfits list
     uint8_t outfitCount = static_cast<uint8_t>(ReadNetworkByte());
-    struct OutfitInfo {
-        uint16_t lookType;
-        std::string name;
-        uint8_t addons;
-    };
-    std::vector<OutfitInfo> outfits;
+    std::vector<OutfitDetail> outfits;
     for (uint32_t i = 0; i < outfitCount; ++i) {
         uint16_t oLookType = ReadNetworkU16();
         uint16_t nameLen = ReadNetworkU16();
@@ -604,19 +583,27 @@ static void __cdecl Hooked_ParseOutfitWindow() {
         outfits.push_back({ oLookType, name, oAddons });
     }
 
-    // Read available mounts list if sent by TFS to cleanly consume packet
+    // Read available mounts list if sent by TFS
+    std::vector<MountDetail> mounts;
     uint32_t readPos = *(uint32_t*)(g_clientBaseAddr + 0x3998B4);
     uint32_t endPos  = *(uint32_t*)(g_clientBaseAddr + 0x3998B0);
     if (readPos < endPos) {
         uint8_t mountCount = static_cast<uint8_t>(ReadNetworkByte());
         for (uint32_t m = 0; m < mountCount; ++m) {
-            ReadNetworkU16(); // clientId
+            uint16_t mId = ReadNetworkU16(); // clientId
             uint16_t mNameLen = ReadNetworkU16();
+            std::string mName;
             for (uint16_t n = 0; n < mNameLen; ++n) {
-                ReadNetworkByte();
+                mName += static_cast<char>(ReadNetworkByte());
             }
+            mounts.push_back({ mId, mName });
         }
     }
+
+#if FEATURE_ENABLE_MOUNTS
+    // Store mount data in NativeOutfitManager so native OutfitDialog extension can use it
+    NativeOutfitManager::SetMountData(lookMount, mountHead, mountBody, mountLegs, mountFeet, mounts);
+#endif
 
     // Native Tibia 8.60 QueueWindow supports up to 86 outfits (cmp esi, 0x56 at 0x51F67A)
     // Buffer layout: header = 0x1C bytes, each outfit = 8 bytes (lookType DWORD + addons DWORD)
@@ -680,18 +667,42 @@ static void __cdecl Hooked_WriteOutfitAddonsAndMount(uint8_t addons) {
     // 1. Write addons as normal via native 0x4F8560
     ((t_WriteByte)(g_clientBaseAddr + 0xF8560))(addons);
 
-    // 2. Also write lookMount (uint16_t) expected by TFS GAME_FEATURE_MOUNTS
-    uint16_t currentMount = 0;
-    if (g_clientBaseAddr) {
-        uint32_t* pPlayerId = (uint32_t*)(g_clientBaseAddr + 0x23FE98);
-        if (pPlayerId && *pPlayerId) {
-            ExtendedCreature extData;
-            if (CreatureManager::get().getExtendedData(*pPlayerId, extData)) {
-                currentMount = extData.mount.mountId;
-            }
-        }
-    }
+#if FEATURE_ENABLE_MOUNTS
+    // 2. Also write lookMount (uint16_t) selected in native OutfitDialog
+    uint16_t currentMount = NativeOutfitManager::GetSelectedMountId();
     ((t_WriteU16)(g_clientBaseAddr + 0xF8700))(currentMount);
+
+    if (currentMount != 0) {
+        // TFS with GAME_FEATURE_MOUNT_COLORS > 0 expects 4 bytes for mount colors!
+        uint8_t mHead = 0, mBody = 0, mLegs = 0, mFeet = 0;
+        NativeOutfitManager::GetSelectedMountColors(mHead, mBody, mLegs, mFeet);
+        ((t_WriteByte)(g_clientBaseAddr + 0xF8560))(mHead);
+        ((t_WriteByte)(g_clientBaseAddr + 0xF8560))(mBody);
+        ((t_WriteByte)(g_clientBaseAddr + 0xF8560))(mLegs);
+        ((t_WriteByte)(g_clientBaseAddr + 0xF8560))(mFeet);
+    }
+#endif
+}
+
+typedef void(__cdecl* t_SendPacket)(int flag);
+
+static void __cdecl Hooked_SendSetOutfitPacket(int flag) {
+    // 1. Call original SendPacket(1) for Opcode 211 (0xD3)
+    ((t_SendPacket)(g_clientBaseAddr + 0xF8E40))(flag);
+
+#if FEATURE_ENABLE_MOUNTS
+    // 2. Automatically sync mount state with Outfit Dialog selection:
+    // If a mount was selected and player is walking -> mount immediately!
+    // If "None" was selected and player is mounted -> dismount!
+    uint16_t mountId = NativeOutfitManager::GetSelectedMountId();
+    bool isMounted = NativeOutfitManager::IsLocalPlayerMounted();
+
+    if (mountId != 0 && !isMounted) {
+        NativeOutfitManager::SendToggleMount(true);
+    } else if (mountId == 0 && isMounted) {
+        NativeOutfitManager::SendToggleMount(false);
+    }
+#endif
 }
 
 void InitNetworkHooks() {
@@ -716,12 +727,16 @@ void InitNetworkHooks() {
         // Hook opcode 211 (0xD3 - sendSetOutfit) at 0x40A81F to also append lookMount
         HookCall(g_clientBaseAddr + 0x0A81F, (uintptr_t)&Hooked_WriteOutfitAddonsAndMount);
 
-        // Hook creature step speed reading (New Speed Law)
-        HookCall(g_clientBaseAddr + 0x0E104, (uintptr_t)&Hooked_ReadCreatureSpeed);
-        HookCall(g_clientBaseAddr + 0x0E3CC, (uintptr_t)&Hooked_ReadCreatureSpeed);
-        HookCall(g_clientBaseAddr + 0x11266, (uintptr_t)&Hooked_ReadCreatureSpeed);
+        // Hook opcode 211 final SendPacket at 0x40A826 to auto-toggle mount upon clicking OK
+        HookCall(g_clientBaseAddr + 0x0A826, (uintptr_t)&Hooked_SendSetOutfitPacket);
+
+        // Creature step speed reading: Keep native 0x4F9C00 (New Speed Law disabled, matches server & TFC)
+        // HookCall(g_clientBaseAddr + 0x0E104, (uintptr_t)&Hooked_ReadCreatureSpeed);
+        // HookCall(g_clientBaseAddr + 0x0E3CC, (uintptr_t)&Hooked_ReadCreatureSpeed);
+        // HookCall(g_clientBaseAddr + 0x11266, (uintptr_t)&Hooked_ReadCreatureSpeed);
     }
 }
+
 
 
 

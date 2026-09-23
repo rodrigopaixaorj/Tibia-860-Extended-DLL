@@ -65,8 +65,8 @@
 // Animation & Movement Tuning
 // ===================================================================
 
-// Magic Effects animation speed: duration per frame in milliseconds
-#define TUNING_EFFECT_SPEED_MS 75
+// Magic Effects animation speed: duration per frame in milliseconds (12.90+ standard = 50ms)
+#define TUNING_EFFECT_SPEED_MS 50
 
 // ===================================================================
 // Network & Auto-Redirection

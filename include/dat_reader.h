@@ -53,6 +53,14 @@ enum DatThingCategory {
     DAT_THING_MISSILE = 3
 };
 
+struct CreatureFrameGroupInfo {
+    uint8_t idleAnim = 1;
+    uint8_t movingAnim = 0;
+    uint32_t idleDurationMs = 150;
+};
+
+CreatureFrameGroupInfo GetCreatureFrameGroupInfo(uint16_t lookType);
+
 bool LoadDatFileCustom(const char* datPath);
 void InitDatReaderHooks();
 

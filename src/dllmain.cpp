@@ -17,6 +17,7 @@
 #include "network_protocol.h"
 #include "ui_market.h"
 #include "market_window.h"
+#include "outfit_window.h"
 #include "timer.h"
 #include "dat_reader.h"
 #include <mmsystem.h>
@@ -70,7 +71,45 @@ static DWORD HookExtendedEngine() {
     }
 }
 
+static WNDPROC s_originalTibiaWndProc = NULL;
+static bool s_skipNextChar = false;
+
+static LRESULT CALLBACK TibiaWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == WM_KEYDOWN) {
+        if ((wParam == 'M' || wParam == 'm') && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            s_skipNextChar = true;
+            NativeOutfitManager::ToggleMount();
+            return 0; // Consumir tecla para não poluir o chat
+        }
+    } else if (msg == WM_CHAR) {
+        if (s_skipNextChar) {
+            s_skipNextChar = false;
+            return 0; // Consumir caractere traduzido
+        }
+    }
+    return CallWindowProcA(s_originalTibiaWndProc, hwnd, msg, wParam, lParam);
+}
+
+static void EnsureTibiaWindowSubclass() {
+    if (!s_originalTibiaWndProc) {
+        HWND hTibia = FindWindowA("TibiaClient", NULL);
+        if (hTibia) {
+            s_originalTibiaWndProc = (WNDPROC)SetWindowLongPtrA(hTibia, GWLP_WNDPROC, (LONG_PTR)TibiaWindowProc);
+        }
+    }
+}
+
+static bool __cdecl Hooked_IsScreenClean() {
+    EnsureTibiaWindowSubclass();
+    if (InGameMarket::IsOpen()) {
+        return false; // Force continuous screen redraw when custom modal window is open
+    }
+    typedef bool(__cdecl* t_IsScreenClean)();
+    return ((t_IsScreenClean)(g_clientBaseAddr + 0x10C860))();
+}
+
 static DWORD HookEnginePresent() {
+    EnsureTibiaWindowSubclass();
     if (InGameMarket::IsOpen()) {
         HWND hTibia = FindWindowA("TibiaClient", NULL);
         if (hTibia) {
@@ -298,7 +337,7 @@ static int __cdecl Hooked_GetMagicEffectFrame(int effectIndex) {
         return 1;
     }
 
-    int frameDuration = g_config.effectSpeedMs > 0 ? g_config.effectSpeedMs : 75;
+    int frameDuration = g_config.effectSpeedMs > 0 ? g_config.effectSpeedMs : TUNING_EFFECT_SPEED_MS;
     DWORD elapsed = now - g_effectStartTime[effectIndex];
     int frame = (int)(elapsed / frameDuration) + 1; // 1-indexed
 
@@ -315,7 +354,7 @@ static int __cdecl Hooked_GetMagicEffectFrame(int effectIndex) {
 
 static void __cdecl Hooked_UpdateEffects() {
     DWORD now = timeGetTime();
-    int frameDuration = g_config.effectSpeedMs > 0 ? g_config.effectSpeedMs : 75;
+    int frameDuration = g_config.effectSpeedMs > 0 ? g_config.effectSpeedMs : TUNING_EFFECT_SPEED_MS;
     typedef int(__cdecl* t_GetEffectAnimCount)(int);
     typedef void(__cdecl* t_DestroyEffect)(int);
     t_GetEffectAnimCount getAnimCount = (t_GetEffectAnimCount)(g_clientBaseAddr + 0x105390);
@@ -370,39 +409,61 @@ int __thiscall NativeCreatureHelper::Hooked_GetAnimationFrame(int animCount) {
         return 1;
     }
 
+    uint16_t lookType = static_cast<uint16_t>(*(uint32_t*)(creature + 0x60));
+    CreatureFrameGroupInfo frameInfo = GetCreatureFrameGroupInfo(lookType);
+    uint8_t idleFrames = (frameInfo.idleAnim > 0) ? frameInfo.idleAnim : 1;
+    uint8_t movingFrames = (frameInfo.movingAnim > 0) ? frameInfo.movingAnim : (animCount > idleFrames ? (animCount - idleFrames) : 0);
+
     int offsetX = *(int*)(creature + 0x30);
     int offsetY = *(int*)(creature + 0x34);
-    uint32_t walkStartTime = *(uint32_t*)(creature + 0x38);
 
     typedef uint32_t(__cdecl* t_GetGameTick)();
     uint32_t currentTick = ((t_GetGameTick)(g_clientBaseAddr + 0x1414E0))();
+    uint32_t creatureId = *(uint32_t*)creature;
 
-    // If standing still (or step movement completed)
-    if (offsetX == 0 && offsetY == 0 && currentTick > walkStartTime) {
-        return 1; // Idle frame (Frame 1)
+    // If standing still (no pixel offset)
+    if (offsetX == 0 && offsetY == 0) {
+        if (idleFrames > 1) {
+            uint32_t idleDur = (frameInfo.idleDurationMs > 0) ? frameInfo.idleDurationMs : 150;
+            uint32_t phase = ((currentTick + (creatureId * 37)) / idleDur) % idleFrames;
+            return static_cast<int>(phase + 1);
+        }
+        return 1; // Static idle frame (standing with legs closed)
     }
 
-    // Creature is currently walking: calculate frame proportional to walked pixels (0..31 pixels)
+    // Creature is currently walking
+    if (movingFrames == 0) {
+        if (idleFrames > 1) {
+            uint32_t idleDur = (frameInfo.idleDurationMs > 0) ? frameInfo.idleDurationMs : 150;
+            uint32_t phase = ((currentTick + (creatureId * 37)) / idleDur) % idleFrames;
+            return static_cast<int>(phase + 1);
+        }
+        return 1;
+    }
+
     int maxOffset = max(abs(offsetX), abs(offsetY));
     if (maxOffset > 32) maxOffset = 32;
     int walkedPixels = 32 - maxOffset; // 0 to 31 pixels traversed
 
-    int movingFrames = animCount - 1; // Number of walking frames
-    if (movingFrames <= 0) {
-        return 1;
+    int movingPhase = 0;
+    if (movingFrames >= 8) {
+        // Modern 8-frame moving animation (proportional across 32 pixels)
+        movingPhase = (walkedPixels * movingFrames / 32) % movingFrames;
+    } else {
+        // Classic moving animation (1 to 7 frames): 4 footfalls per tile (8px per step), matching TFC & 8.60:
+        // (walkedPixels / 8) % movingFrames
+        movingPhase = (walkedPixels / 8) % movingFrames;
     }
 
-    // Proportional frame calculation across the entire 32-pixel step
-    int movingFrameIndex = (walkedPixels * movingFrames) / 32;
-    if (movingFrameIndex >= movingFrames) {
-        movingFrameIndex = movingFrames - 1;
-    }
-    if (movingFrameIndex < 0) {
-        movingFrameIndex = 0;
-    }
+    if (movingPhase < 0) movingPhase = 0;
+    if (movingPhase >= movingFrames) movingPhase = movingFrames - 1;
 
-    // Frame 1 is Idle, Frames 2..N are Moving steps (1-indexed)
-    return movingFrameIndex + 2;
+    // Frame 1..idleFrames are Idle, then movingFrames are Walking steps (1-indexed)
+    int finalFrame = idleFrames + movingPhase + 1;
+    if (finalFrame > animCount) {
+        finalFrame = animCount;
+    }
+    return finalFrame;
 }
 
 void __thiscall NativeCreatureHelper::Hooked_Walk(int deltaX, int deltaY, int groundSpeed) {
@@ -442,12 +503,10 @@ void __thiscall NativeCreatureHelper::Hooked_Walk(int deltaX, int deltaY, int gr
     if (speed <= 0) speed = 150;
     if (groundSpeed <= 0) groundSpeed = 150;
 
-    // Monsters (0x40000000..0x7FFFFFFF) and NPCs (0x80000000+) walk with server pacing (3.0x step duration)
-    bool isMonsterOrNpc = (creatureId >= 0x40000000);
-    double multiplier = isMonsterOrNpc ? 3.0 : 1.0;
-
-    int stepDuration = (int)(((double)(groundSpeed * 1000) / speed) * multiplier);
-    if (stepDuration < 1) stepDuration = 1000;
+    bool isDiagonal = (deltaX != 0 && deltaY != 0);
+    int baseMultiplier = isDiagonal ? 3000 : 1000;
+    int stepDuration = (int)((double)(groundSpeed * baseMultiplier) / speed);
+    if (stepDuration < 1) stepDuration = baseMultiplier;
 
     int serverBeat = *(int*)(g_clientBaseAddr + 0x23FEEC);
     if (serverBeat <= 0) serverBeat = 50;
@@ -462,13 +521,7 @@ void __thiscall NativeCreatureHelper::Hooked_Walk(int deltaX, int deltaY, int gr
     typedef uint32_t(__cdecl* t_GetGameTick)();
     uint32_t currentTick = ((t_GetGameTick)(g_clientBaseAddr + 0x1414E0))();
     *(uint32_t*)(creature + 0x38) = currentTick + stepDuration;
-
-    int diagDuration = stepDuration;
-    if (deltaX != 0 && deltaY != 0) {
-        diagDuration = (int)(((double)(groundSpeed * 3000) / speed) * multiplier);
-        if (diagDuration < 1) diagDuration = 1000;
-    }
-    *(uint32_t*)(creature + 0x3C) = currentTick + diagDuration;
+    *(uint32_t*)(creature + 0x3C) = currentTick + stepDuration;
     *(uint8_t*)(creature + 0x4C) = 1; // isWalking = 1
 }
 
@@ -609,8 +662,10 @@ static void SafeInit() {
     InitCreatureHooks();
     InitNetworkHooks();
     InitMarketHooks();
+    NativeOutfitManager::InitHooks();
 
-    // Hook Frame Present (renders in-game Market every single frame without needing window resize)
+    // Hook Frame Present and Screen Clean check (renders UI every single frame smoothly without window drag)
+    HookCall(g_clientBaseAddr + 0x5A267, (DWORD)&Hooked_IsScreenClean);
     HookCall(g_clientBaseAddr + 0x5A34A, (DWORD)&HookEnginePresent);
 
     // Patch ContentWindows.cpp:2460 Experience Underflow crash [bug0000996]
